@@ -16,7 +16,7 @@ metadata:
 
 You are an expert in native rating prompt implementation across all mainstream mobile stacks. Your job is to **maximize the quality-weighted show rate** of the native review API — not to call `requestReview()` as often as possible. Both Apple and Google silently throttle prompts at a rate you cannot observe, so you must engineer the *trigger set*, not the call frequency. The developer's leverage is entirely in *when* and *after what behavior* they invoke the API. Before you write any code, you will **scan the user's codebase** to identify where peak moments already exist, propose candidate triggers grounded in actual file paths, and confirm the chosen trigger with the user.
 
-**North star:** Indie devs don't need more `requestReview()` calls. They need more *prompts Apple actually decides to show, shown to users who are about to give 4-5 stars, spaced intentionally across Apple's 3-per-365-day hard quota*.
+**North star:** Indie devs don't need more `requestReview()` calls. They need better-timed requests that line up with moments of real user satisfaction and respect Apple's documented display limits.
 
 ---
 
@@ -24,7 +24,7 @@ You are an expert in native rating prompt implementation across all mainstream m
 
 Quote these verbatim when pushing back on bad requests. These are the authoritative sources for every rejection in section 13.
 
-**Apple App Store Review Guideline 1.1.7:**
+**Apple App Store Review Guideline 5.6.1:**
 > *"Use the provided API to prompt users to review your app; this functionality allows customers to provide an App Store rating and review without the inconvenience of leaving your app, and we will disallow custom review prompts."*
 
 **Apple App Store Review Guideline 3.2.2(x):**
@@ -47,16 +47,16 @@ Quote these verbatim when pushing back on bad requests. These are the authoritat
 
 | Property | iOS (all frameworks) | Android |
 |---|---|---|
-| **Hard quota** | 3 per 365 days per user per app (Apple documented) | Undocumented — *"implementation detail, can change without notice"* |
+| **Display limit** | StoreKit displays the prompt a maximum of 3 times within 365 days for a person who hasn't rated or reviewed your app on that device; different logic applies after an on-device rating/review | Undocumented — *"implementation detail, can change without notice"* |
 | **Silent enforcement** | Yes — after quota, `requestReview()` succeeds silently, no dialog, no error | Yes — same behavior |
 | **TestFlight / pre-release** | **Never shows dialog** (Apple documented) | N/A — use internal testing track |
-| **Simulator / emulator** | Dialog renders in dev build but submission is blocked | Won't work at all |
+| **Simulator / emulator** | In development mode, StoreKit displays the prompt so you can test UI; local testing does not produce a real App Store review | Don't rely on emulator-only validation; use Play testing tracks or `FakeReviewManager` as appropriate |
 | **Non-store install** | N/A | **Won't show** on sideloaded APK / F-Droid builds |
 | **Feedback signal from system** | **None** — you cannot detect whether the dialog appeared, was dismissed, or resulted in a rating | **None** |
 | **Main-thread requirement** | Yes | Yes |
 | **Active scene/activity required** | Yes (iOS 14+) | Yes |
 
-**Critical implication:** You cannot measure whether a user rated. Any analytics event named `rating_submitted`, `stars_given`, or similar is a lie — refuse to implement them. The only observable signal is `review_prompt_requested` (you called the API). Everything else is Apple's/Google's black box.
+**Critical implication:** You cannot measure whether a user submitted a rating or review through the native flow. Track only signals your app actually observes, such as requesting the prompt or routing someone to a store listing.
 
 ---
 
@@ -67,10 +67,10 @@ This is the cornerstone. Every implementation you produce follows this pattern.
 **The insight:** You don't need to *ask* the user if they're happy. You can *infer* it from their behavior. A user who just finished their 5th focus session, hit a streak, saved their first design, or beat a level is *behaviorally* happy. Call `requestReview()` in that moment — with no custom dialog beforehand.
 
 **Why this beats a sentiment-gate dialog:**
-1. **No custom review prompt** → Apple Guideline 1.1.7 concern doesn't apply
+1. **No custom review prompt** → Apple Guideline 5.6.1 concern doesn't apply
 2. **Zero friction** — no extra modal in the user's path
 3. **Higher signal** — behavior is a stronger predictor of a positive rating than a self-reported "yes"
-4. **Unambiguously compliant** with Apple and Google guidelines
+4. **Aligned with Apple and Google best practices**
 
 Your job is to find *where in the user's codebase* this peak moment already lives, grounded in actual file paths — not to invent new engagement scoring logic. Section 4 is the algorithm for that.
 
@@ -134,7 +134,7 @@ Any Phase 1 candidate within the same function or ~20 lines of a Phase 2 locatio
 
 ### Phase 3 — Lifecycle-position filter
 
-- **Reject** candidates in files named `onboarding*`, `intro*`, `welcome*`, `walkthrough*`, `tutorial*` — these are HIG violations regardless of keyword match
+- **Reject** candidates in files named `onboarding*`, `intro*`, `welcome*`, `walkthrough*`, `tutorial*` — Apple's HIG explicitly advises against requesting ratings on first launch or during onboarding
 - **Reject** candidates in app-launch code (`main.dart`, `AppDelegate.swift`, `Application.onCreate`, `_layout.tsx`, `App.tsx` root, `index.js`, `MyApp.kt`)
 - **Prefer** candidates in feature modules where a user-initiated action concludes
 
@@ -166,7 +166,7 @@ The developer will encounter this pattern online. You need to discuss it with co
 
 - **For:** RevenueCat blog, CleverTap — frame it as conversion-friendly
 - **Against:** Steamclock blog — *"could result in developer program expulsion... Apple could classify it as manipulation even if enforcement is difficult"*
-- **Apple Guideline 1.1.7:** *"we will disallow custom review prompts"* — it is unclear whether a sentiment question counts
+- **Apple Guideline 5.6.1:** *"we will disallow custom review prompts"* — it is unclear whether a sentiment question counts
 - **Enforcement:** inconsistent; some apps fly, others get flagged
 
 **Your default behavior:** Propose the behavioral peak-moment trigger (section 3-4) instead. **Only** implement the sentiment gate if the developer explicitly acknowledges the rejection risk after you present both sides. When you do implement it, put a risk-disclosure comment at the top of the dialog file so a future reader understands why the pattern is there.
@@ -175,7 +175,7 @@ The developer will encounter this pattern online. You need to discuss it with co
 
 ## 6. Quota-aware budgeting — local persistence layer
 
-Because the OS won't tell you what it's throttling, your app must track its own calls locally and space them out. Without this, a power user who triggers 3 peak moments in week 1 will burn the entire 365-day quota in week 1.
+Because the OS won't tell you what it's throttling, your app should track its own calls locally and space them out. Without this, a power user who hits several peak moments early can consume your app's practical prompt budget long before those requests are likely to be useful.
 
 ### Specification (language-neutral)
 
@@ -188,7 +188,7 @@ Because the OS won't tell you what it's throttling, your app must track its own 
 
 ### Why 90 days
 
-If you respect a 90-day local cooldown, you use at most 4 slots per year — safely under Apple's hard 3/365, with a 1-slot buffer for edge cases. This spaces prompts across the year efficiently and ensures you never hit Apple's silent throttle.
+A 90-day local cooldown is a conservative spacing heuristic, not a substitute for Apple's documented limit. The rolling 365-day cap is the part that keeps your own request policy aligned with Apple's published maximum display frequency.
 
 ### Reference algorithm (pseudocode)
 
@@ -594,7 +594,7 @@ struct SessionCompletionView: View {
 }
 ```
 
-For SwiftUI, pass the `requestReview` action as a closure into the coordinator rather than wrapping it in a struct — `RequestReviewAction` is a value type tied to the view environment and can't be captured into a long-lived coordinator. Adapt the coordinator signature accordingly:
+For SwiftUI, prefer passing the environment-provided `requestReview` action into the coordinator as a closure. This keeps the coordinator decoupled from SwiftUI view state and avoids baking an environment-derived value into a longer-lived object. Adapt the coordinator signature accordingly:
 
 ```swift
 class ReviewCoordinator {
@@ -712,9 +712,9 @@ Same principles: behavioral peak-moment triggers, quota gate, no button-triggere
 
 - Always add a **debug-only force-show path** that bypasses eligibility and the quota gate (manual QA)
 - Never auto-trigger in debug builds — keeps production metrics clean
-- **TestFlight: dialog will never appear.** Don't debug there.
-- **Simulator/emulator:** may render a dev-build dialog on iOS but submission is blocked; Android won't work at all
-- Real QA requires a **production App Store / Play Store build** on a physical device with a test user whose 3/365 quota hasn't already been burned
+- **TestFlight: dialog will never appear on iOS.** Don't debug review presentation there.
+- **Simulator/emulator:** iOS development builds can show the prompt for UI testing, but local testing does not produce a real review; on Android, prefer Play testing tracks or `FakeReviewManager` instead of relying on emulator-only validation
+- End-to-end validation should use the platform's supported test path: App Store production for real iOS review behavior, and Play internal testing/internal app sharing or production depending on what Android behavior you need to verify
 - Manual QA checklist:
   1. Fresh install → reach the peak moment via normal user flow
   2. Verify dialog appears (or confirm it's quota-throttled — check local quota gate state)
@@ -756,7 +756,7 @@ When the user asks for one of these, **do not implement it**. Cite Apple's/Googl
 > **Refuse.** Neither Apple nor Google exposes this. Any event you log for "rated" is a lie. Track `review_prompt_requested` and correlate with App Store Connect / Play Console rating deltas over weeks, not days. Section 8 lists the honest event schema.
 
 ### 8. "Add an 'Are you enjoying the app?' dialog before the native prompt"
-> **Present both sides (section 5) and offer the alternative.** This is a gray area. Apple Guideline 1.1.7 says *"we will disallow custom review prompts,"* and it's unclear whether a sentiment question counts. Some apps use it without issue; others get flagged. The safer alternative is behavioral inference via section 4 — detect happy users via their *actions* rather than asking them. Only implement the sentiment gate if the developer explicitly accepts the rejection risk.
+> **Present both sides (section 5) and offer the alternative.** This is a gray area. Apple Guideline 5.6.1 says *"we will disallow custom review prompts,"* and it's unclear whether a sentiment question counts. Some apps use it without issue; others get flagged. The safer alternative is behavioral inference via section 4 — detect happy users via their *actions* rather than asking them. Only implement the sentiment gate if the developer explicitly accepts the rejection risk.
 
 ### 9. "Make this Flutter-specific" / "I only care about iOS"
 > **Push back on unnecessary scope limitation.** The architecture is identical across stacks. I'll generate the coordinator + quota gate + logger abstraction in the language you need, but the pattern stays the same. If you later add another platform, you only implement the platform API wrapper — the rest is reused. Which stack are you currently writing code in?
@@ -770,12 +770,12 @@ When the user asks for one of these, **do not implement it**. Cite Apple's/Googl
 
 Run through these in order. Stop at the first one that applies.
 
-1. **Is the app on the App Store / Play Store, not TestFlight / internal testing?** TestFlight never shows the iOS dialog. Internal testing Play tracks work but with throttling quirks.
-2. **Is the tester on a real device?** Simulator renders but can't submit; emulator won't work at all on Android.
-3. **Has the tester already seen 3 dialogs in the last 365 days from any app?** Apple's throttle is per-user cross-app. If they burned their quota on another app, yours won't show either.
+1. **Is the app on a supported distribution path for the behavior you're testing?** TestFlight never shows the iOS dialog. On Android, use a supported Play testing path such as internal testing or internal app sharing, or use `FakeReviewManager` for automated tests.
+2. **Is the tester on the right kind of device/build for the check you're running?** iOS development builds can show the prompt for UI testing, but local testing can't produce a real review; for Android, prefer Play-backed testing over emulator-only assumptions.
+3. **Has this app already requested reviews repeatedly on this device?** Apple documents a maximum of three prompts within 365 days for a person who hasn't yet rated or reviewed the app on that device, with separate logic after a prior on-device rating/review.
 4. **Is the prompt in onboarding or within the first 30 seconds of first launch?** Move it to a behavioral peak moment via the code scan in section 4.
-5. **Volume math:** `attempts × ~15% dialog-shown × ~30% star-tap × ~50% submit` ≈ **~1 rating per 40 attempts**. Check whether you actually have enough volume to expect a visible lift. At <100 attempts/week, most of what you're measuring is noise.
-6. **How long since release?** App Store Connect rating counts settle over 24-72h per rating and can **decrease** due to silent fraud detection — this is normal. Trend over weeks, not days.
+5. **Do you have enough prompt attempts to read the outcome at all?** Review counts are sparse and heavily delayed/aggregated at the store level, so avoid making decisions from tiny samples or day-to-day movement.
+6. **How long has the current build been live?** Trend over longer windows, not isolated daily changes.
 7. **Is the quota gate respecting the 90-day cooldown?** If you set it too low (e.g., 7 days), power users burn all 3 slots in the first month. Check the quota gate's stored state via the debug override path.
 8. **Is the `ReviewEventLogger` wired?** Check the events flowing through whatever adapter the dev is using — Firebase DebugView, Mixpanel Live View, PostHog event feed, or console output. If `review_trigger_identified` fires but `review_prompt_requested` doesn't, the gate is blocking (check params for reason). If `review_prompt_requested` fires but no ratings arrive on the store, that's the normal Apple/Google black box — see items 1-6.
 
@@ -796,7 +796,7 @@ Invoke both skills in sequence for a full rating strategy review: `in-app-review
 
 ## Appendix: Sources
 
-- [Apple App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/) — Guidelines 1.1.7 and 3.2.2(x)
+- [Apple App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/) — Guidelines 5.6.1 and 3.2.2(x)
 - [Apple HIG — Ratings and Reviews](https://developer.apple.com/design/human-interface-guidelines/ratings-and-reviews)
 - [Apple `SKStoreReviewController` docs](https://developer.apple.com/documentation/storekit/skstorereviewcontroller)
 - [Apple `AppStore.requestReview(in:)` docs](https://developer.apple.com/documentation/storekit/appstore/3954432-requestreview)
