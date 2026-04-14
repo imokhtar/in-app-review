@@ -6,10 +6,10 @@ A [Claude Code](https://claude.com/claude-code) skill that teaches Claude how to
 
 Most indie devs reach for `SKStoreReviewController.requestReview()` / Google Play's `ReviewManager`, call it in onboarding or on first launch, and then wonder why their App Store rating count isn't moving. What's actually happening:
 
-- **Apple silently throttles** — 3 prompts per user per app per 365 days, enforced invisibly. After the limit, `requestReview()` succeeds but no dialog appears.
-- **TestFlight and simulators never show the dialog** at all.
+- **Apple limits display frequency** — StoreKit shows the prompt at most three times within 365 days for a person who hasn't rated or reviewed your app on that device, and the API may return without presenting anything.
+- **TestFlight never shows the dialog, and simulators are only for UI testing** — development builds can show the prompt, but local testing doesn't produce a real review.
 - **The system never tells your app** whether the dialog was shown, dismissed, or resulted in a rating.
-- **Onboarding prompts violate Apple's HIG** (*"give people time to form an opinion about your app before asking for a rating"*) and produce low-quality ratings.
+- **Onboarding prompts run against Apple's HIG guidance** (*"give people time to form an opinion about your app before asking for a rating"*) and usually produce lower-signal reviews.
 
 This skill codifies the patterns that actually work: **behavioral peak-moment triggers** (detect happy users from their actions, not a custom "Are you enjoying?" dialog), a **local 90-day cooldown + 365-day quota gate**, and a **provider-neutral logger abstraction** so the same architecture works with Firebase, Mixpanel, Amplitude, PostHog, Segment, or no analytics at all.
 
@@ -62,7 +62,7 @@ The skill auto-loads via its description match and walks Claude through the code
 ## Core principles the skill enforces
 
 1. **Engineer the trigger set, not the call frequency** — you can't outrun Apple's silent throttle, so every call must land on a genuine peak moment
-2. **Behavioral inference over sentiment dialogs** — infer happy users from their actions (completion events, streaks, achievements) rather than asking with a custom "Are you enjoying?" modal (which is a gray area under Guideline 1.1.7)
+2. **Behavioral inference over sentiment dialogs** — infer happy users from their actions (completion events, streaks, achievements) rather than asking with a custom "Are you enjoying?" modal (which is a gray area under Guideline 5.6.1)
 3. **Local quota gate with 90-day cooldown** — never burn Apple's 3/365 quota in week one of a power user's lifecycle
 4. **Provider-neutral logging** — 1-method `ReviewEventLogger` interface with default no-op; 5-line adapters for every major analytics provider
 5. **Stack-agnostic architecture** — identical 4-component design (`Coordinator` + `QuotaGate` + `Logger` + `PlatformAPI`) across Swift / SwiftUI / Kotlin / Dart / TypeScript
@@ -71,7 +71,7 @@ The skill auto-loads via its description match and walks Claude through the code
 
 Every factual claim in the skill cites a primary source. See the `Appendix: Sources` section in [`SKILL.md`](SKILL.md) for the full list, including:
 
-- Apple App Store Review Guidelines (1.1.7, 3.2.2(x))
+- Apple App Store Review Guidelines (5.6.1, 3.2.2(x))
 - Apple HIG — Ratings and Reviews
 - Apple `SKStoreReviewController` / `AppStore.requestReview(in:)` / `RequestReviewAction` docs
 - Google Play In-App Review API docs
@@ -88,4 +88,4 @@ MIT — see [LICENSE](LICENSE). Use, modify, and redistribute freely with attrib
 
 ## Credits
 
-Authored with Claude Code. The skill's core pattern (behavioral peak-moment triggers over sentiment gates) was refined after a multi-round fact-check against Apple's and Google's primary sources — v1 of the design endorsed sentiment gates as the core technique and was rejected after discovering the gray-area Guideline 1.1.7 risk. See the plan file in the companion [authoring notes](https://github.com/imokhtar/in-app-review/issues) if you want to understand the design rationale.
+Authored with Claude Code. The skill's core pattern (behavioral peak-moment triggers over sentiment gates) was refined after a multi-round fact-check against Apple's and Google's primary sources — v1 of the design endorsed sentiment gates as the core technique and was revised after discovering the gray-area Guideline 5.6.1 risk. See the plan file in the companion [authoring notes](https://github.com/imokhtar/in-app-review/issues) if you want to understand the design rationale.
